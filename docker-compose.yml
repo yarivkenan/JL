@@ -69,6 +69,26 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Storage consumer — reads from Kafka, persists to TimescaleDB
+  # ---------------------------------------------------------------------------
+  consumer:
+    build:
+      context: .
+      dockerfile: storage/Dockerfile
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_TOPIC: "otel.metrics"
+      CONSUMER_GROUP: "storage-consumers"
+      MAX_RETRIES: "3"
+      DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # TimescaleDB — metrics storage
   # ---------------------------------------------------------------------------
   db:
