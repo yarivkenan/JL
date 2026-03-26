@@ -1,11 +1,7 @@
 name: Ingest E2E
 
 on:
-  push:
-    branches: [main, worktree-ingest]
-    paths: [ingest/**]
   pull_request:
-    branches: [main]
     paths: [ingest/**]
 
 jobs:
