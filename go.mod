@@ -1,4 +1,4 @@
-module github.com/yarivkenan/JL/ingest
+module github.com/yarivkenan/JL
 
 go 1.26.1
 

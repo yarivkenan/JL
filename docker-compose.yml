@@ -67,7 +67,7 @@ services:
   ingest:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: ingest/Dockerfile
     depends_on:
       redpanda-init:
         condition: service_completed_successfully

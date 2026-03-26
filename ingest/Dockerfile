@@ -7,7 +7,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /ingest-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /ingest-server ./ingest/cmd/server
 
 # Stage 2: minimal runtime image
 FROM alpine:3.21

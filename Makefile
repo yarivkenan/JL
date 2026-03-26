@@ -37,7 +37,7 @@ e2e:
 	done
 
 	@echo "==> Running e2e tests"
-	INGEST_URL=$(INGEST_URL) go test -v -tags e2e ./e2e/... ; TEST_EXIT=$$? ; \
+	INGEST_URL=$(INGEST_URL) go test -v -tags e2e ./ingest/e2e/... ; TEST_EXIT=$$? ; \
 	echo "==> Tearing down services" ; \
 	$(COMPOSE) down ; \
 	exit $$TEST_EXIT

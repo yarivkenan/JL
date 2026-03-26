@@ -13,9 +13,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ingest/go.mod
-          cache-dependency-path: ingest/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Run e2e tests
-        working-directory: ingest
         run: make e2e
