@@ -119,7 +119,7 @@ services:
   rules:
     build:
       context: .
-      dockerfile: rules/Dockerfile
+      dockerfile: alerting/Dockerfile
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
