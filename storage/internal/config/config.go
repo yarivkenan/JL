@@ -6,24 +6,37 @@ import (
 	"strings"
 )
 
-// Config holds runtime configuration for the storage consumer.
-type Config struct {
+// ConsumerConfig holds runtime configuration for the Kafka consumer.
+// No HTTP address — the consumer has no public API.
+type ConsumerConfig struct {
 	KafkaBrokers  []string
 	KafkaTopic    string
 	ConsumerGroup string
 	MaxRetries    int
 	DatabaseURL   string
-	StorageAddr   string
 }
 
-func Load() Config {
-	return Config{
+// QueryConfig holds runtime configuration for the query API server.
+// No Kafka — the query server only reads from the database.
+type QueryConfig struct {
+	Addr        string
+	DatabaseURL string
+}
+
+func LoadConsumer() ConsumerConfig {
+	return ConsumerConfig{
 		KafkaBrokers:  splitCSV(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		KafkaTopic:    getEnv("KAFKA_TOPIC", "otel.metrics"),
 		ConsumerGroup: getEnv("CONSUMER_GROUP", "storage-consumers"),
 		MaxRetries:    getEnvInt("MAX_RETRIES", 3),
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://otel:otel@localhost:5432/otel_metrics"),
-		StorageAddr:   getEnv("STORAGE_ADDR", ":8081"),
+	}
+}
+
+func LoadQuery() QueryConfig {
+	return QueryConfig{
+		Addr:        getEnv("QUERY_ADDR", ":8081"),
+		DatabaseURL: getEnv("DATABASE_URL", "postgres://otel:otel@localhost:5432/otel_metrics"),
 	}
 }
 
