@@ -84,23 +84,26 @@ func (e *Evaluator) evaluate(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
-	status := "resolved"
-	if compare(value, rule.Condition.Operator, rule.Condition.Threshold) {
-		status = "firing"
-	}
+	firing := compare(value, rule.Condition.Operator, rule.Condition.Threshold)
 
-	alert := store.AlertRecord{
+	dp := store.AlertDataPoint{
 		RuleName:       rule.Name,
 		MetricName:     rule.MetricName,
+		ServiceName:    serviceName,
 		EvaluatedValue: value,
 		Threshold:      rule.Condition.Threshold,
-		FiredAt:        job.EvaluateAt,
-		Status:         status,
+		Severity:       rule.Action.Severity,
+		Timestamp:      job.EvaluateAt,
+		Firing:         firing,
 	}
-	if err := e.repo.InsertAlert(ctx, alert); err != nil {
-		return fmt.Errorf("insert alert for rule %q: %w", rule.Name, err)
+	if err := e.repo.WriteAlertDataPoint(ctx, dp); err != nil {
+		return fmt.Errorf("write alert data point for rule %q: %w", rule.Name, err)
 	}
 
+	status := "resolved"
+	if firing {
+		status = "firing"
+	}
 	slog.Info("rule evaluated",
 		"rule", rule.Name,
 		"aggregation", rule.Condition.Aggregation,
