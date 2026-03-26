@@ -9,6 +9,7 @@ A backend system that ingests OpenTelemetry metrics, processes them via a messag
 | `ingest` | HTTP server accepting OTLP metrics | `4317` |
 | `consumer` | Kafka consumer, DB writer (no public API) | — |
 | `query` | Read-only HTTP API over stored metrics | `8081` |
+| `rules` | Cron scheduler + alert evaluator | — |
 | `redpanda` | Kafka-compatible broker | `19092` |
 
 ## Architecture
@@ -38,6 +39,17 @@ POST /v1/metrics
       ├── GET /v1/data_points
       ├── GET /v1/dead_letters
       └── GET /healthz
+
+ rules engine           (cmd/rules)
+      │  every 30s, one job per rule
+      ▼
+   Kafka (Redpanda)     otel.rule-checks topic
+      │
+      ▼
+ evaluator              (cmd/rules — same process)
+      │  queries TimescaleDB with rule's window + filter
+      ▼
+   alerts table         firing / resolved records
 ```
 
 Failed messages are retried up to `MAX_RETRIES` times, then written to the `dead_letter_queue` table.
@@ -105,6 +117,10 @@ All services are configured via environment variables. Defaults work out of the 
 | `MAX_RETRIES` | `3` | Retry attempts before dead-letter |
 | `DATABASE_URL` | `postgres://otel:otel@localhost:5432/otel_metrics` | TimescaleDB DSN |
 | `QUERY_ADDR` | `:8081` | Query API server listen address |
+| `RULES_FILE` | `/etc/rules/rules.json` | Path to rules JSON config |
+| `RULES_CHECKS_TOPIC` | `otel.rule-checks` | Kafka topic for rule check jobs |
+| `RULES_CONSUMER_GROUP` | `rules-engine` | Kafka consumer group for evaluator |
+| `RULES_INTERVAL` | `30s` | How often rules are dispatched for evaluation |
 
 ## Repository layout
 
@@ -123,6 +139,12 @@ JL/
 │   │   └── server/     # chi router + middleware
 │   ├── e2e/            # end-to-end tests
 │   └── Dockerfile
+├── cmd/rules/          # rules engine entry point
+├── internal/
+│   ├── rules/          # rule types, scheduler, evaluator
+│   └── store/          # alert repository + DB pool
+├── configs/rules.json  # example rule definitions
+├── rules/Dockerfile
 └── storage/            # queue consumer + DB storage + query API
     ├── cmd/
     │   ├── consumer/   # Kafka consumer (no public API)
@@ -145,7 +167,28 @@ data_points        — individual measurements; TimescaleDB hypertable on timest
                      columns: value, timestamp, ingestion_timestamp,
                               service_name, attributes (JSONB), resource_attributes (JSONB)
 dead_letter_queue  — messages that exceeded the retry limit
+alerts             — rule evaluation results (rule_name, metric_name,
+                     evaluated_value, threshold, fired_at, status)
 ```
+
+## Rules engine
+
+Rules are defined in a JSON config file (see `configs/rules.json`). Each rule specifies a metric, optional filters, an aggregation condition, a time window, and an action:
+
+```json
+{
+  "name": "high-latency-checkout",
+  "metric_name": "http.request.duration",
+  "filter": { "service.name": "checkout-service", "method": "GET" },
+  "condition": { "aggregation": "avg", "operator": ">", "threshold": 500 },
+  "window": { "type": "time", "duration": "5m" },
+  "action": { "type": "alert", "severity": "warning", "message": "Checkout GET latency exceeds 500ms average" }
+}
+```
+
+Supported aggregations: `avg`, `p95`, `count`, `value` (any single data point). The `service.name` filter key maps to the `service_name` column; all other keys use JSONB containment on `attributes`.
+
+Every `RULES_INTERVAL` (default 30s), the scheduler publishes one `RuleCheckJob` per rule to the `otel.rule-checks` Kafka topic. The evaluator consumer reads each job, queries TimescaleDB, and writes a `firing` or `resolved` record to the `alerts` table.
 
 ### Example queries
 
