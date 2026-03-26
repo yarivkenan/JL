@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yarivkenan/JL/alerting/internal/query"
 	"github.com/yarivkenan/JL/alerting/internal/rules"
 	"github.com/yarivkenan/JL/alerting/internal/store"
 )
@@ -37,6 +38,7 @@ func main() {
 	defer pool.Close()
 
 	repo := store.NewAlertRepository(pool)
+	queryClient := query.NewClient(cfg.QueryServiceURL)
 
 	scheduler, err := rules.NewScheduler(ruleList, cfg.KafkaBrokers, cfg.RuleChecksTopic, cfg.Interval)
 	if err != nil {
@@ -45,7 +47,7 @@ func main() {
 	}
 	defer scheduler.Close()
 
-	evaluator, err := rules.NewEvaluator(cfg.KafkaBrokers, cfg.RuleChecksTopic, cfg.ConsumerGroup, repo)
+	evaluator, err := rules.NewEvaluator(cfg.KafkaBrokers, cfg.RuleChecksTopic, cfg.ConsumerGroup, repo, queryClient)
 	if err != nil {
 		slog.Error("create evaluator", "error", err)
 		os.Exit(1)
@@ -56,6 +58,7 @@ func main() {
 		"rules", len(ruleList),
 		"interval", cfg.Interval,
 		"topic", cfg.RuleChecksTopic,
+		"query_service", cfg.QueryServiceURL,
 	)
 
 	go scheduler.Run(ctx)
@@ -70,6 +73,7 @@ type config struct {
 	RuleChecksTopic string
 	ConsumerGroup   string
 	DatabaseURL     string
+	QueryServiceURL string
 	RulesFile       string
 	Interval        time.Duration
 }
@@ -84,6 +88,7 @@ func loadConfig() config {
 		RuleChecksTopic: getEnv("RULES_CHECKS_TOPIC", "otel.rule-checks"),
 		ConsumerGroup:   getEnv("RULES_CONSUMER_GROUP", "rules-engine"),
 		DatabaseURL:     getEnv("DATABASE_URL", "postgres://otel:otel@localhost:5432/otel_metrics"),
+		QueryServiceURL: getEnv("QUERY_SERVICE_URL", "http://localhost:8081"),
 		RulesFile:       getEnv("RULES_FILE", "/etc/rules/rules.json"),
 		Interval:        interval,
 	}

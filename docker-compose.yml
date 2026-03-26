@@ -125,11 +125,14 @@ services:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+      query:
+        condition: service_started
     environment:
       KAFKA_BROKERS: "redpanda:9092"
       RULES_CHECKS_TOPIC: "otel.rule-checks"
       RULES_CONSUMER_GROUP: "rules-engine"
       DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+      QUERY_SERVICE_URL: "http://query:8081"
       RULES_FILE: "/etc/rules/rules.json"
       RULES_INTERVAL: "30s"
     volumes:
