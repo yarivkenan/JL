@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yarivkenan/JL/storage/internal/storage"
@@ -23,6 +24,7 @@ func New(repo storage.Repository) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /v1/metrics", s.metrics)
 	mux.HandleFunc("GET /v1/data_points", s.dataPoints)
 	mux.HandleFunc("GET /v1/dead_letters", s.deadLetters)
 	return mux
@@ -32,6 +34,22 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	filter := storage.MetricFilter{
+		Name: r.URL.Query().Get("name"),
+	}
+	metrics, err := s.repo.ListMetrics(r.Context(), filter)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if metrics == nil {
+		metrics = []*storage.MetricDef{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metrics)
+}
+
 func (s *Server) dataPoints(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := storage.DataPointFilter{
@@ -39,13 +57,25 @@ func (s *Server) dataPoints(w http.ResponseWriter, r *http.Request) {
 		ServiceName: q.Get("service_name"),
 	}
 	if since := q.Get("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339Nano, since); err == nil {
+		// Accept either a Go duration ("1h", "30m") or RFC3339.
+		if d, err := time.ParseDuration(since); err == nil {
+			filter.Since = time.Now().UTC().Add(-d)
+		} else if t, err := time.Parse(time.RFC3339Nano, since); err == nil {
 			filter.Since = t
 		}
 	}
 	if limit := q.Get("limit"); limit != "" {
 		if l, err := strconv.Atoi(limit); err == nil {
 			filter.Limit = l
+		}
+	}
+	// attr=key:value (repeatable) — AND semantics via JSONB containment.
+	if attrs := q["attr"]; len(attrs) > 0 {
+		filter.Attributes = make(map[string]any, len(attrs))
+		for _, kv := range attrs {
+			if k, v, ok := strings.Cut(kv, ":"); ok {
+				filter.Attributes[k] = v
+			}
 		}
 	}
 

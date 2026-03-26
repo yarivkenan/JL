@@ -146,8 +146,108 @@ func TestConsumerDeadLettersInvalidMessage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Query API tests
+// ---------------------------------------------------------------------------
+
+func TestListMetrics(t *testing.T) {
+	metricName := uniqueName(t, "http.request.duration")
+	publishOTLPGauge(t, metricName, "svc", 1.0, time.Now())
+
+	// Wait for the consumer to persist.
+	pollDataPoints(t, metricName, "", 30*time.Second)
+
+	metrics := getMetrics(t, "")
+	var found bool
+	for _, m := range metrics {
+		if m.Name == metricName {
+			found = true
+			if m.Type != "gauge" {
+				t.Errorf("type: got %q, want %q", m.Type, "gauge")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("metric %q not found in GET /v1/metrics", metricName)
+	}
+}
+
+func TestListMetricsByName(t *testing.T) {
+	name1 := uniqueName(t, "cpu.usage")
+	name2 := uniqueName(t, "mem.usage")
+	publishOTLPGauge(t, name1, "svc", 1.0, time.Now())
+	publishOTLPGauge(t, name2, "svc", 2.0, time.Now())
+
+	pollDataPoints(t, name1, "", 30*time.Second)
+	pollDataPoints(t, name2, "", 30*time.Second)
+
+	metrics := getMetrics(t, name1)
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(metrics))
+	}
+	if metrics[0].Name != name1 {
+		t.Errorf("got %q, want %q", metrics[0].Name, name1)
+	}
+}
+
+func TestQueryDataPointsAttrFilter(t *testing.T) {
+	metricName := uniqueName(t, "http.request.duration")
+	now := time.Now()
+	publishOTLPGaugeWithAttrs(t, metricName, "svc", 100.0, now,
+		map[string]string{"method": "GET"})
+	publishOTLPGaugeWithAttrs(t, metricName, "svc", 200.0, now.Add(-time.Second),
+		map[string]string{"method": "POST"})
+
+	pollDataPointsN(t, metricName, "", 2, 30*time.Second)
+
+	url := fmt.Sprintf("%s/v1/data_points?metric_name=%s&attr=method:GET", storageURL(""), metricName)
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var points []dataPoint
+	if err := json.Unmarshal(body, &points); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(points) != 1 {
+		t.Fatalf("attr filter: expected 1 point, got %d", len(points))
+	}
+	if points[0].Value != 100.0 {
+		t.Errorf("expected value 100.0, got %v", points[0].Value)
+	}
+}
+
+func TestQueryDataPointsSinceDuration(t *testing.T) {
+	metricName := uniqueName(t, "http.request.duration")
+	now := time.Now()
+	publishOTLPGauge(t, metricName, "svc", 1.0, now)
+	publishOTLPGauge(t, metricName, "svc", 2.0, now.Add(-10*time.Minute))
+
+	pollDataPointsN(t, metricName, "", 2, 30*time.Second)
+
+	// Use duration-style since ("5m") instead of RFC3339.
+	points := getDataPoints(t, metricName, "", "5m", 10)
+	if len(points) != 1 {
+		t.Fatalf("duration since: expected 1 point, got %d", len(points))
+	}
+	if points[0].Value != 1.0 {
+		t.Errorf("expected value 1.0, got %v", points[0].Value)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
+
+type metricDef struct {
+	ID          string    `json:"ID"`
+	Name        string    `json:"Name"`
+	Description string    `json:"Description"`
+	Unit        string    `json:"Unit"`
+	Type        string    `json:"Type"`
+	CreatedAt   time.Time `json:"CreatedAt"`
+}
 
 type dataPoint struct {
 	ID                 string         `json:"id"`
@@ -172,6 +272,28 @@ type deadLetter struct {
 
 func storageURL(path string) string {
 	return "http://" + storageAddr + path
+}
+
+func getMetrics(t *testing.T, name string) []metricDef {
+	t.Helper()
+	url := storageURL("/v1/metrics")
+	if name != "" {
+		url += "?name=" + name
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET /v1/metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/metrics returned %d: %s", resp.StatusCode, body)
+	}
+	var metrics []metricDef
+	if err := json.Unmarshal(body, &metrics); err != nil {
+		t.Fatalf("unmarshal metrics: %v\nbody: %s", err, body)
+	}
+	return metrics
 }
 
 func getDataPoints(t *testing.T, metricName, serviceName, since string, limit int) []dataPoint {
@@ -290,6 +412,59 @@ func publishOTLPGauge(t *testing.T, metricName, serviceName string, value float6
 											{
 												TimeUnixNano: uint64(ts.UnixNano()),
 												Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: value},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	raw, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal proto: %v", err)
+	}
+	publishRawMessage(t, base64.StdEncoding.EncodeToString(raw))
+}
+
+func publishOTLPGaugeWithAttrs(t *testing.T, metricName, serviceName string, value float64, ts time.Time, attrs map[string]string) {
+	t.Helper()
+
+	dpAttrs := make([]*commonv1.KeyValue, 0, len(attrs))
+	for k, v := range attrs {
+		dpAttrs = append(dpAttrs, &commonv1.KeyValue{
+			Key:   k,
+			Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: v}},
+		})
+	}
+
+	req := &collectorv1.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricsv1.ResourceMetrics{
+			{
+				Resource: &resourcev1.Resource{
+					Attributes: []*commonv1.KeyValue{
+						{
+							Key:   "service.name",
+							Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: serviceName}},
+						},
+					},
+				},
+				ScopeMetrics: []*metricsv1.ScopeMetrics{
+					{
+						Metrics: []*metricsv1.Metric{
+							{
+								Name: metricName,
+								Data: &metricsv1.Metric_Gauge{
+									Gauge: &metricsv1.Gauge{
+										DataPoints: []*metricsv1.NumberDataPoint{
+											{
+												TimeUnixNano: uint64(ts.UnixNano()),
+												Value:        &metricsv1.NumberDataPoint_AsDouble{AsDouble: value},
+												Attributes:   dpAttrs,
 											},
 										},
 									},
