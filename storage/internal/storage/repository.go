@@ -37,6 +37,40 @@ type DataPoint struct {
 	IsMonotonic        *bool          `json:"is_monotonic,omitempty"`
 }
 
+// Rule defines an alerting rule.
+type Rule struct {
+	ID          uuid.UUID      `json:"id"`
+	Name        string         `json:"name"`
+	MetricName  string         `json:"metric_name"`
+	ServiceName string         `json:"service_name,omitempty"`
+	Condition   map[string]any `json:"condition"`
+	Window      map[string]any `json:"window"`
+	Action      map[string]any `json:"action"`
+	CreatedAt   time.Time      `json:"created_at"`
+}
+
+// Alert stores a rule evaluation result.
+type Alert struct {
+	ID             uuid.UUID  `json:"id"`
+	RuleName       string     `json:"rule_name"`
+	MetricName     string     `json:"metric_name"`
+	ServiceName    string     `json:"service_name,omitempty"`
+	EvaluatedValue float64    `json:"evaluated_value"`
+	Threshold      float64    `json:"threshold"`
+	Operator       string     `json:"operator"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+}
+
+// AlertFilter limits results from ListAlerts.
+type AlertFilter struct {
+	RuleName string
+	Status   string
+	Since    time.Time
+	Limit    int
+}
+
 // DeadLetter represents a Kafka message that exceeded its retry limit.
 type DeadLetter struct {
 	ID        uuid.UUID `json:"id"`
@@ -83,6 +117,21 @@ type Repository interface {
 
 	// ListDeadLetters returns the most recent dead-letter entries, newest first.
 	ListDeadLetters(ctx context.Context, limit int) ([]*DeadLetter, error)
+
+	// CreateRule inserts a new alerting rule.
+	CreateRule(ctx context.Context, rule *Rule) (*Rule, error)
+
+	// ListRules returns all defined rules.
+	ListRules(ctx context.Context) ([]*Rule, error)
+
+	// DeleteRule removes a rule by name. Returns true if a row was deleted.
+	DeleteRule(ctx context.Context, name string) (bool, error)
+
+	// ListAlerts returns alerts matching the filter.
+	ListAlerts(ctx context.Context, filter AlertFilter) ([]*Alert, error)
+
+	// GetAlert returns a single alert by ID.
+	GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error)
 }
 
 type postgresRepository struct {
@@ -292,4 +341,128 @@ func (r *postgresRepository) ListDeadLetters(ctx context.Context, limit int) ([]
 		letters = append(letters, dl)
 	}
 	return letters, rows.Err()
+}
+
+func (r *postgresRepository) CreateRule(ctx context.Context, rule *Rule) (*Rule, error) {
+	condJSON, err := json.Marshal(rule.Condition)
+	if err != nil {
+		return nil, fmt.Errorf("marshal condition: %w", err)
+	}
+	windowJSON, err := json.Marshal(rule.Window)
+	if err != nil {
+		return nil, fmt.Errorf("marshal window: %w", err)
+	}
+	actionJSON, err := json.Marshal(rule.Action)
+	if err != nil {
+		return nil, fmt.Errorf("marshal action: %w", err)
+	}
+
+	const q = `
+		INSERT INTO rules (name, metric_name, service_name, condition, window, action)
+		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+		RETURNING id, name, metric_name, service_name, condition, window, action, created_at`
+
+	result := &Rule{}
+	var condRaw, windowRaw, actionRaw []byte
+	err = r.pool.QueryRow(ctx, q,
+		rule.Name, rule.MetricName, rule.ServiceName, condJSON, windowJSON, actionJSON,
+	).Scan(&result.ID, &result.Name, &result.MetricName, &result.ServiceName,
+		&condRaw, &windowRaw, &actionRaw, &result.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create rule %q: %w", rule.Name, err)
+	}
+	json.Unmarshal(condRaw, &result.Condition)
+	json.Unmarshal(windowRaw, &result.Window)
+	json.Unmarshal(actionRaw, &result.Action)
+	return result, nil
+}
+
+func (r *postgresRepository) ListRules(ctx context.Context) ([]*Rule, error) {
+	const q = `SELECT id, name, metric_name, service_name, condition, window, action, created_at
+		FROM rules ORDER BY name`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []*Rule
+	for rows.Next() {
+		ru := &Rule{}
+		var condRaw, windowRaw, actionRaw []byte
+		if err := rows.Scan(&ru.ID, &ru.Name, &ru.MetricName, &ru.ServiceName,
+			&condRaw, &windowRaw, &actionRaw, &ru.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan rule: %w", err)
+		}
+		json.Unmarshal(condRaw, &ru.Condition)
+		json.Unmarshal(windowRaw, &ru.Window)
+		json.Unmarshal(actionRaw, &ru.Action)
+		rules = append(rules, ru)
+	}
+	return rules, rows.Err()
+}
+
+func (r *postgresRepository) DeleteRule(ctx context.Context, name string) (bool, error) {
+	const q = `DELETE FROM rules WHERE name = $1`
+	tag, err := r.pool.Exec(ctx, q, name)
+	if err != nil {
+		return false, fmt.Errorf("delete rule %q: %w", name, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *postgresRepository) ListAlerts(ctx context.Context, filter AlertFilter) ([]*Alert, error) {
+	q := `SELECT id, rule_name, metric_name, service_name, evaluated_value, threshold, operator, status, created_at, resolved_at
+		FROM alerts WHERE 1=1`
+	var args []any
+
+	if filter.RuleName != "" {
+		args = append(args, filter.RuleName)
+		q += fmt.Sprintf(" AND rule_name = $%d", len(args))
+	}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		q += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if !filter.Since.IsZero() {
+		args = append(args, filter.Since)
+		q += fmt.Sprintf(" AND created_at >= $%d", len(args))
+	}
+
+	q += " ORDER BY created_at DESC"
+
+	if filter.Limit > 0 {
+		args = append(args, filter.Limit)
+		q += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list alerts: %w", err)
+	}
+	defer rows.Close()
+
+	var alerts []*Alert
+	for rows.Next() {
+		a := &Alert{}
+		if err := rows.Scan(&a.ID, &a.RuleName, &a.MetricName, &a.ServiceName,
+			&a.EvaluatedValue, &a.Threshold, &a.Operator, &a.Status,
+			&a.CreatedAt, &a.ResolvedAt); err != nil {
+			return nil, fmt.Errorf("scan alert: %w", err)
+		}
+		alerts = append(alerts, a)
+	}
+	return alerts, rows.Err()
+}
+
+func (r *postgresRepository) GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error) {
+	const q = `SELECT id, rule_name, metric_name, service_name, evaluated_value, threshold, operator, status, created_at, resolved_at
+		FROM alerts WHERE id = $1`
+	a := &Alert{}
+	err := r.pool.QueryRow(ctx, q, id).Scan(&a.ID, &a.RuleName, &a.MetricName, &a.ServiceName,
+		&a.EvaluatedValue, &a.Threshold, &a.Operator, &a.Status, &a.CreatedAt, &a.ResolvedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get alert %s: %w", id, err)
+	}
+	return a, nil
 }
