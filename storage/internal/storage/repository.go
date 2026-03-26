@@ -24,16 +24,27 @@ type MetricDef struct {
 
 // DataPoint is the stored representation of a single measurement.
 type DataPoint struct {
-	ID                 uuid.UUID
-	MetricID           uuid.UUID
-	ServiceName        string
-	Value              float64
-	Timestamp          time.Time
-	StartTimestamp     *time.Time
-	IngestionTimestamp time.Time
-	ResourceAttributes map[string]any
-	Attributes         map[string]any
-	IsMonotonic        *bool
+	ID                 uuid.UUID      `json:"id"`
+	MetricID           uuid.UUID      `json:"metric_id"`
+	MetricName         string         `json:"metric_name"`
+	ServiceName        string         `json:"service_name"`
+	Value              float64        `json:"value"`
+	Timestamp          time.Time      `json:"timestamp"`
+	StartTimestamp     *time.Time     `json:"start_timestamp,omitempty"`
+	IngestionTimestamp time.Time      `json:"ingestion_timestamp"`
+	ResourceAttributes map[string]any `json:"resource_attributes"`
+	Attributes         map[string]any `json:"attributes"`
+	IsMonotonic        *bool          `json:"is_monotonic,omitempty"`
+}
+
+// DeadLetter represents a Kafka message that exceeded its retry limit.
+type DeadLetter struct {
+	ID        uuid.UUID `json:"id"`
+	MessageID string    `json:"message_id"`
+	Payload   string    `json:"payload"`
+	Error     string    `json:"error"`
+	Attempts  int       `json:"attempts"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // MetricFilter limits results from ListMetrics.
@@ -69,6 +80,9 @@ type Repository interface {
 
 	// InsertDeadLetter stores a message that exceeded its retry limit.
 	InsertDeadLetter(ctx context.Context, messageID, payload, errMsg string, attempts int) error
+
+	// ListDeadLetters returns the most recent dead-letter entries, newest first.
+	ListDeadLetters(ctx context.Context, limit int) ([]*DeadLetter, error)
 }
 
 type postgresRepository struct {
@@ -184,7 +198,7 @@ func (r *postgresRepository) QueryDataPoints(ctx context.Context, filter DataPoi
 	}
 
 	q := `
-		SELECT dp.id, dp.metric_id, dp.service_name, dp.value, dp.timestamp,
+		SELECT dp.id, dp.metric_id, m.name, dp.service_name, dp.value, dp.timestamp,
 		       dp.start_timestamp, dp.ingestion_timestamp,
 		       dp.resource_attributes, dp.attributes, dp.is_monotonic
 		FROM data_points dp
@@ -227,7 +241,7 @@ func (r *postgresRepository) QueryDataPoints(ctx context.Context, filter DataPoi
 		p := &DataPoint{}
 		var resAttrsRaw, attrsRaw []byte
 		if err := rows.Scan(
-			&p.ID, &p.MetricID, &p.ServiceName, &p.Value, &p.Timestamp,
+			&p.ID, &p.MetricID, &p.MetricName, &p.ServiceName, &p.Value, &p.Timestamp,
 			&p.StartTimestamp, &p.IngestionTimestamp,
 			&resAttrsRaw, &attrsRaw, &p.IsMonotonic,
 		); err != nil {
@@ -252,4 +266,30 @@ func (r *postgresRepository) InsertDeadLetter(ctx context.Context, messageID, pa
 		return fmt.Errorf("insert dead letter (message %s): %w", messageID, err)
 	}
 	return nil
+}
+
+func (r *postgresRepository) ListDeadLetters(ctx context.Context, limit int) ([]*DeadLetter, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	const q = `
+		SELECT id, message_id, payload, error, attempts, created_at
+		FROM dead_letter_queue
+		ORDER BY created_at DESC
+		LIMIT $1`
+	rows, err := r.pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list dead letters: %w", err)
+	}
+	defer rows.Close()
+
+	var letters []*DeadLetter
+	for rows.Next() {
+		dl := &DeadLetter{}
+		if err := rows.Scan(&dl.ID, &dl.MessageID, &dl.Payload, &dl.Error, &dl.Attempts, &dl.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan dead letter: %w", err)
+		}
+		letters = append(letters, dl)
+	}
+	return letters, rows.Err()
 }

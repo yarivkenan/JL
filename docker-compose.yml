@@ -86,6 +86,9 @@ services:
       CONSUMER_GROUP: "storage-consumers"
       MAX_RETRIES: "3"
       DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+      STORAGE_ADDR: ":8081"
+    ports:
+      - "8081:8081"
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------

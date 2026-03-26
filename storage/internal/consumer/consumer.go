@@ -12,8 +12,8 @@ import (
 	collectorv1 "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/judgment-labs/ingest/storage/internal/models"
-	"github.com/judgment-labs/ingest/storage/internal/storage"
+	"github.com/yarivkenan/JL/storage/internal/models"
+	"github.com/yarivkenan/JL/storage/internal/storage"
 )
 
 const headerIngestedAt = "ingested_at"
