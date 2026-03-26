@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/yarivkenan/JL/storage/internal/api"
 	"github.com/yarivkenan/JL/storage/internal/config"
 	"github.com/yarivkenan/JL/storage/internal/consumer"
 	"github.com/yarivkenan/JL/storage/internal/storage"
@@ -21,10 +19,8 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	cfg := config.Load()
+	cfg := config.LoadConsumer()
 
-	// Apply schema migrations before accepting any messages. Goose is
-	// idempotent so this is safe to run on every startup.
 	if err := storage.RunMigrations(cfg.DatabaseURL); err != nil {
 		slog.Error("migrations failed", "error", err)
 		os.Exit(1)
@@ -55,18 +51,6 @@ func main() {
 	repo := storage.NewRepository(pool)
 	c := consumer.New(kafkaClient, repo, logger, cfg.MaxRetries)
 
-	// Start the query API server so e2e tests and dashboards can read data.
-	apiServer := &http.Server{
-		Addr:    cfg.StorageAddr,
-		Handler: api.New(repo).Handler(),
-	}
-	go func() {
-		slog.Info("api server starting", "addr", cfg.StorageAddr)
-		if err := apiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("api server error", "error", err)
-		}
-	}()
-
 	slog.Info("consumer started",
 		"topic", cfg.KafkaTopic,
 		"group", cfg.ConsumerGroup,
@@ -78,6 +62,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	apiServer.Shutdown(context.Background())
 	slog.Info("consumer stopped")
 }
