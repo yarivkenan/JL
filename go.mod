@@ -1,4 +1,4 @@
-module github.com/judgment-labs/ingest
+module github.com/yarivkenan/JL/ingest
 
 go 1.26.1
 

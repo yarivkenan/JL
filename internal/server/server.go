@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/judgment-labs/ingest/internal/handler"
+	"github.com/yarivkenan/JL/ingest/internal/handler"
 )
 
 // New returns an HTTP server wired with all routes and middleware.

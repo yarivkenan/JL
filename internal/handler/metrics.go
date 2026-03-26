@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/judgment-labs/ingest/internal/otel"
-	"github.com/judgment-labs/ingest/internal/queue"
+	"github.com/yarivkenan/JL/ingest/internal/otel"
+	"github.com/yarivkenan/JL/ingest/internal/queue"
 	collectorv1 "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"

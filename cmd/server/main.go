@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/judgment-labs/ingest/internal/config"
-	"github.com/judgment-labs/ingest/internal/handler"
-	"github.com/judgment-labs/ingest/internal/queue"
-	"github.com/judgment-labs/ingest/internal/server"
+	"github.com/yarivkenan/JL/ingest/internal/config"
+	"github.com/yarivkenan/JL/ingest/internal/handler"
+	"github.com/yarivkenan/JL/ingest/internal/queue"
+	"github.com/yarivkenan/JL/ingest/internal/server"
 )
 
 func main() {
