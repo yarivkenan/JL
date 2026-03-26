@@ -47,6 +47,10 @@ services:
         rpk topic create otel.metrics \
           --brokers redpanda:9092 \
           --partitions 3 \
+          --replicas 1 || true && \
+        rpk topic create otel.rule-checks \
+          --brokers redpanda:9092 \
+          --partitions 3 \
           --replicas 1 || true
     restart: "no"
 
@@ -107,6 +111,29 @@ services:
       DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
     ports:
       - "8081:8081"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Rules engine — cron scheduler + evaluator consumer
+  # ---------------------------------------------------------------------------
+  rules:
+    build:
+      context: .
+      dockerfile: rules/Dockerfile
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      RULES_CHECKS_TOPIC: "otel.rule-checks"
+      RULES_CONSUMER_GROUP: "rules-engine"
+      DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+      RULES_FILE: "/etc/rules/rules.json"
+      RULES_INTERVAL: "30s"
+    volumes:
+      - ./configs/rules.json:/etc/rules/rules.json:ro
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------

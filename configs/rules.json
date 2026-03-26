@@ -1,0 +1,66 @@
+[
+  {
+    "name": "high-latency-checkout",
+    "metric_name": "http.request.duration",
+    "filter": {
+      "service.name": "checkout-service",
+      "method": "GET"
+    },
+    "condition": {
+      "aggregation": "avg",
+      "operator": ">",
+      "threshold": 500
+    },
+    "window": {
+      "type": "time",
+      "duration": "5m"
+    },
+    "action": {
+      "type": "alert",
+      "severity": "warning",
+      "message": "Checkout GET latency exceeds 500ms average"
+    }
+  },
+  {
+    "name": "p95-latency-checkout",
+    "metric_name": "http.request.duration",
+    "filter": {
+      "service.name": "checkout-service"
+    },
+    "condition": {
+      "aggregation": "p95",
+      "operator": ">",
+      "threshold": 1000
+    },
+    "window": {
+      "type": "time",
+      "duration": "5m"
+    },
+    "action": {
+      "type": "alert",
+      "severity": "critical",
+      "message": "Checkout p95 latency exceeds 1s"
+    }
+  },
+  {
+    "name": "high-request-volume",
+    "metric_name": "http.server.request.count",
+    "filter": {
+      "service.name": "checkout-service"
+    },
+    "condition": {
+      "aggregation": "count",
+      "operator": ">",
+      "threshold": 100
+    },
+    "window": {
+      "type": "time",
+      "duration": "1m"
+    },
+    "action": {
+      "type": "alert",
+      "severity": "info",
+      "message": "Checkout request volume exceeds 100 req/min"
+    }
+  }
+]
