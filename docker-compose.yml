@@ -34,17 +34,6 @@ services:
       retries: 10
       start_period: 20s
 
-  # Redpanda Console — web UI for inspecting topics and messages
-  redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:v2.7.2
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    environment:
-      KAFKA_BROKERS: redpanda:9092
-    ports:
-      - "8080:8080"
-
   # Topic initialiser — creates the otel.metrics topic before the ingest
   # server starts, so the producer never hits a "topic does not exist" error.
   redpanda-init:
