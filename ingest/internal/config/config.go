@@ -5,12 +5,13 @@ import (
 	"strings"
 )
 
-// Config holds all runtime configuration for the ingest server.
+// Config holds all runtime configuration for the pipeline.
 // Values are populated from environment variables with sensible defaults.
 type Config struct {
 	ServerAddr   string
 	KafkaBrokers []string
 	KafkaTopic   string
+	DatabaseURL  string
 }
 
 func Load() Config {
@@ -18,6 +19,7 @@ func Load() Config {
 		ServerAddr:   getEnv("SERVER_ADDR", ":4317"),
 		KafkaBrokers: splitCSV(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		KafkaTopic:   getEnv("KAFKA_TOPIC", "otel.metrics"),
+		DatabaseURL:  getEnv("DATABASE_URL", "postgres://otel:otel@localhost:5432/otel_metrics"),
 	}
 }
 
