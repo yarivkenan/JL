@@ -7,18 +7,21 @@ import (
 	"log/slog"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/yarivkenan/JL/internal/query"
 	"github.com/yarivkenan/JL/internal/store"
 )
 
-// Evaluator consumes RuleCheckJob messages from Kafka, queries the database,
-// and writes an alert record for every evaluation (firing or resolved).
+// Evaluator consumes RuleCheckJob messages from Kafka, queries the query
+// service for metric data, evaluates alert conditions, and writes an alert
+// record for every evaluation (firing or resolved).
 type Evaluator struct {
-	client *kgo.Client
-	repo   *store.AlertRepository
+	client      *kgo.Client
+	repo        *store.AlertRepository
+	queryClient *query.Client
 }
 
 // NewEvaluator creates an Evaluator subscribed to topic using the given consumer group.
-func NewEvaluator(brokers []string, topic, groupID string, repo *store.AlertRepository) (*Evaluator, error) {
+func NewEvaluator(brokers []string, topic, groupID string, repo *store.AlertRepository, queryClient *query.Client) (*Evaluator, error) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(groupID),
@@ -27,7 +30,7 @@ func NewEvaluator(brokers []string, topic, groupID string, repo *store.AlertRepo
 	if err != nil {
 		return nil, fmt.Errorf("create kafka consumer: %w", err)
 	}
-	return &Evaluator{client: client, repo: repo}, nil
+	return &Evaluator{client: client, repo: repo, queryClient: queryClient}, nil
 }
 
 // Run polls Kafka and evaluates each RuleCheckJob until ctx is cancelled.
@@ -48,7 +51,7 @@ func (e *Evaluator) Run(ctx context.Context) {
 	}
 }
 
-// evaluate deserialises one RuleCheckJob, queries the DB, and writes an alert.
+// evaluate deserialises one RuleCheckJob, queries the query service, and writes an alert.
 func (e *Evaluator) evaluate(ctx context.Context, payload []byte) error {
 	var job RuleCheckJob
 	if err := json.Unmarshal(payload, &job); err != nil {
@@ -57,30 +60,24 @@ func (e *Evaluator) evaluate(ctx context.Context, payload []byte) error {
 
 	rule := job.Rule
 
-	aq := store.AggregateQuery{
-		MetricName:  rule.MetricName,
-		Aggregation: rule.Condition.Aggregation,
-		Since:       job.WindowStart,
-		Until:       job.WindowEnd,
+	serviceName := rule.Filter["service.name"]
+
+	points, err := e.queryClient.FetchDataPoints(ctx, rule.MetricName, serviceName, job.WindowStart)
+	if err != nil {
+		return fmt.Errorf("fetch data points for rule %q: %w", rule.Name, err)
 	}
 
-	// "service.name" maps to the dedicated service_name column;
-	// all other filter keys are JSONB attribute matches.
-	extraAttrs := map[string]any{}
-	for k, v := range rule.Filter {
-		if k == "service.name" {
-			aq.ServiceName = v
-		} else {
-			extraAttrs[k] = v
+	// Filter to the evaluation window (query service supports since but not until).
+	var filtered []query.DataPoint
+	for _, p := range points {
+		if !p.Timestamp.After(job.WindowEnd) {
+			filtered = append(filtered, p)
 		}
 	}
-	if len(extraAttrs) > 0 {
-		aq.Attributes = extraAttrs
-	}
 
-	value, hasData, err := e.repo.QueryAggregate(ctx, aq)
+	value, hasData, err := query.Aggregate(filtered, rule.Condition.Aggregation)
 	if err != nil {
-		return fmt.Errorf("query aggregate for rule %q: %w", rule.Name, err)
+		return fmt.Errorf("aggregate for rule %q: %w", rule.Name, err)
 	}
 	if !hasData {
 		slog.Debug("no data points in window, skipping evaluation", "rule", rule.Name)
