@@ -1,6 +1,29 @@
 services:
 
   # ---------------------------------------------------------------------------
+  # API Gateway — single public entry point, routes to ingest / query
+  # ---------------------------------------------------------------------------
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    depends_on:
+      ingest:
+        condition: service_started
+      query:
+        condition: service_started
+    environment:
+      GATEWAY_ADDR: ":8080"
+      INGEST_URL: "http://ingest:4317"
+      QUERY_URL: "http://query:8081"
+    ports:
+      - "8080:8080"
+    networks:
+      - public
+      - internal
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Redpanda — Kafka-compatible broker (single-node, no ZooKeeper)
   # ---------------------------------------------------------------------------
   redpanda:
@@ -21,12 +44,14 @@ services:
       - --rpc-addr=redpanda:33145
       - --advertise-rpc-addr=redpanda:33145
     ports:
-      - "19092:19092"   # Kafka API (host access)
+      - "19092:19092"   # Kafka API (host access for local dev)
       - "18082:18082"   # Pandaproxy REST
       - "18081:18081"   # Schema Registry
       - "9644:9644"     # Admin API
     volumes:
       - redpanda-data:/var/lib/redpanda/data
+    networks:
+      - internal
     healthcheck:
       test: ["CMD", "rpk", "cluster", "info", "--brokers=localhost:9092"]
       interval: 10s
@@ -52,10 +77,12 @@ services:
           --brokers redpanda:9092 \
           --partitions 3 \
           --replicas 1 || true
+    networks:
+      - internal
     restart: "no"
 
   # ---------------------------------------------------------------------------
-  # Ingest service
+  # Ingest service (internal only — accessed via gateway)
   # ---------------------------------------------------------------------------
   ingest:
     build:
@@ -68,8 +95,8 @@ services:
       SERVER_ADDR: ":4317"
       KAFKA_BROKERS: "redpanda:9092"
       KAFKA_TOPIC: "otel.metrics"
-    ports:
-      - "4317:4317"
+    networks:
+      - internal
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -92,10 +119,12 @@ services:
       CONSUMER_GROUP: "storage-consumers"
       MAX_RETRIES: "3"
       DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+    networks:
+      - internal
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Query API — read-only HTTP API over stored metrics (public-facing)
+  # Query API (internal only — accessed via gateway)
   # ---------------------------------------------------------------------------
   query:
     build:
@@ -109,8 +138,8 @@ services:
     environment:
       QUERY_ADDR: ":8081"
       DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
-    ports:
-      - "8081:8081"
+    networks:
+      - internal
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -137,6 +166,8 @@ services:
       RULES_INTERVAL: "30s"
     volumes:
       - ./configs/rules.json:/etc/rules/rules.json:ro
+    networks:
+      - internal
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -152,11 +183,19 @@ services:
       - "5432:5432"
     volumes:
       - timescale_data:/home/postgres/pgdata/data
+    networks:
+      - internal
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U otel -d otel_metrics"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+networks:
+  public:
+    driver: bridge
+  internal:
+    driver: bridge
 
 volumes:
   redpanda-data:
