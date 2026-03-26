@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Config holds all runtime configuration for the ingest server.
+// Config holds all runtime configuration for the pipeline.
 // Values are populated from environment variables with sensible defaults.
 type Config struct {
 	ServerAddr   string

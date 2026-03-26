@@ -68,5 +68,66 @@ services:
       - "4317:4317"
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Storage consumer — reads from Kafka, persists to TimescaleDB (no public API)
+  # ---------------------------------------------------------------------------
+  consumer:
+    build:
+      context: .
+      dockerfile: storage/Dockerfile
+      args:
+        CMD: consumer
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_TOPIC: "otel.metrics"
+      CONSUMER_GROUP: "storage-consumers"
+      MAX_RETRIES: "3"
+      DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Query API — read-only HTTP API over stored metrics (public-facing)
+  # ---------------------------------------------------------------------------
+  query:
+    build:
+      context: .
+      dockerfile: storage/Dockerfile
+      args:
+        CMD: query
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      QUERY_ADDR: ":8081"
+      DATABASE_URL: "postgres://otel:otel@db:5432/otel_metrics"
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # TimescaleDB — metrics storage
+  # ---------------------------------------------------------------------------
+  db:
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_USER: otel
+      POSTGRES_PASSWORD: otel
+      POSTGRES_DB: otel_metrics
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otel -d otel_metrics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   redpanda-data:
+  timescale_data:
