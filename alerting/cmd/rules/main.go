@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yarivkenan/JL/internal/rules"
-	"github.com/yarivkenan/JL/internal/store"
+	"github.com/yarivkenan/JL/alerting/internal/rules"
+	"github.com/yarivkenan/JL/alerting/internal/store"
 )
 
 func main() {

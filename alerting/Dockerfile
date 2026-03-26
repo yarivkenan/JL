@@ -7,7 +7,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o /rules-engine ./cmd/rules
+RUN CGO_ENABLED=0 go build -o /rules-engine ./alerting/cmd/rules
 
 FROM alpine:3.20
 

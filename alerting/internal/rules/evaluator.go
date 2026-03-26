@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/yarivkenan/JL/internal/store"
+	"github.com/yarivkenan/JL/alerting/internal/store"
 )
 
 // Evaluator consumes RuleCheckJob messages from Kafka, queries the database,
