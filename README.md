@@ -9,7 +9,6 @@ A backend system that ingests OpenTelemetry metrics, processes them via a messag
 | `ingest` | HTTP server accepting OTLP metrics | `4317` |
 | `storage` | Queue consumer, DB writer, rules engine | TBD |
 | `redpanda` | Kafka-compatible broker | `19092` |
-| `redpanda-console` | Broker web UI | `8080` |
 
 ## Requirements
 
