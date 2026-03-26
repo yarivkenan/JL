@@ -1,156 +1,108 @@
 package models
 
 import (
-	"fmt"
-	"strconv"
 	"time"
+
+	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	metricsv1 "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
-// ExportMetricsServiceRequest is the top-level OTLP/HTTP metrics payload.
-// Field names follow the protobuf JSON encoding (camelCase).
-type ExportMetricsServiceRequest struct {
-	ResourceMetrics []ResourceMetrics `json:"resourceMetrics"`
-}
+// MetricType mirrors the OTEL metric data types we support.
+type MetricType string
 
-type ResourceMetrics struct {
-	Resource     Resource       `json:"resource"`
-	ScopeMetrics []ScopeMetrics `json:"scopeMetrics"`
-}
+const (
+	MetricTypeGauge MetricType = "gauge"
+	MetricTypeSum   MetricType = "sum"
+)
 
-type Resource struct {
-	Attributes []KeyValue `json:"attributes"`
-}
-
-type ScopeMetrics struct {
-	Scope   InstrumentationScope `json:"scope"`
-	Metrics []Metric             `json:"metrics"`
-}
-
-type InstrumentationScope struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type Metric struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Unit        string `json:"unit"`
-	Gauge       *Gauge `json:"gauge,omitempty"`
-	Sum         *Sum   `json:"sum,omitempty"`
-}
-
-type Gauge struct {
-	DataPoints []NumberDataPoint `json:"dataPoints"`
-}
-
-type Sum struct {
-	DataPoints             []NumberDataPoint `json:"dataPoints"`
-	IsMonotonic            bool              `json:"isMonotonic"`
-	AggregationTemporality int               `json:"aggregationTemporality"`
-}
-
-// NumberDataPoint represents a single gauge or sum measurement.
-// Timestamps are uint64 nanoseconds encoded as strings per the proto3 JSON spec.
-type NumberDataPoint struct {
-	Attributes        []KeyValue `json:"attributes"`
-	StartTimeUnixNano string     `json:"startTimeUnixNano,omitempty"`
-	TimeUnixNano      string     `json:"timeUnixNano"`
-	// Exactly one of AsDouble or AsInt will be set.
-	AsDouble *float64 `json:"asDouble,omitempty"`
-	AsInt    *string  `json:"asInt,omitempty"` // int64 encoded as string in proto3 JSON
-}
-
-// Value returns the data point's numeric value as a float64.
-func (dp *NumberDataPoint) Value() (float64, error) {
-	if dp.AsDouble != nil {
-		return *dp.AsDouble, nil
+// TypeOf returns the MetricType for a proto Metric, or "" if unsupported.
+func TypeOf(m *metricsv1.Metric) MetricType {
+	switch m.Data.(type) {
+	case *metricsv1.Metric_Gauge:
+		return MetricTypeGauge
+	case *metricsv1.Metric_Sum:
+		return MetricTypeSum
+	default:
+		return ""
 	}
-	if dp.AsInt != nil {
-		v, err := strconv.ParseInt(*dp.AsInt, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("parse asInt %q: %w", *dp.AsInt, err)
-		}
-		return float64(v), nil
-	}
-	return 0, fmt.Errorf("data point has neither asDouble nor asInt")
 }
 
-// Timestamp parses TimeUnixNano into a time.Time.
-func (dp *NumberDataPoint) Timestamp() (time.Time, error) {
-	return parseUnixNano(dp.TimeUnixNano)
-}
-
-// StartTimestamp parses StartTimeUnixNano into a time.Time, returning nil if absent.
-func (dp *NumberDataPoint) StartTimestamp() (*time.Time, error) {
-	if dp.StartTimeUnixNano == "" {
+// DataPointsOf extracts all NumberDataPoints from a proto Metric along with
+// sum-specific fields. Returns nil for unsupported metric types.
+func DataPointsOf(m *metricsv1.Metric) ([]*metricsv1.NumberDataPoint, *bool) {
+	switch d := m.Data.(type) {
+	case *metricsv1.Metric_Gauge:
+		return d.Gauge.DataPoints, nil
+	case *metricsv1.Metric_Sum:
+		mono := d.Sum.IsMonotonic
+		return d.Sum.DataPoints, &mono
+	default:
 		return nil, nil
 	}
-	t, err := parseUnixNano(dp.StartTimeUnixNano)
-	if err != nil {
-		return nil, err
+}
+
+// PointValue returns the numeric value of a data point as float64.
+func PointValue(dp *metricsv1.NumberDataPoint) float64 {
+	switch v := dp.Value.(type) {
+	case *metricsv1.NumberDataPoint_AsDouble:
+		return v.AsDouble
+	case *metricsv1.NumberDataPoint_AsInt:
+		return float64(v.AsInt)
+	default:
+		return 0
 	}
-	return &t, nil
 }
 
-// KeyValue is an OTEL attribute key-value pair.
-type KeyValue struct {
-	Key   string   `json:"key"`
-	Value AnyValue `json:"value"`
+// PointTimestamp converts a data point's TimeUnixNano to time.Time.
+func PointTimestamp(dp *metricsv1.NumberDataPoint) time.Time {
+	return time.Unix(0, int64(dp.TimeUnixNano)).UTC()
 }
 
-// AnyValue holds one of the supported OTEL attribute value types.
-type AnyValue struct {
-	StringValue *string  `json:"stringValue,omitempty"`
-	IntValue    *string  `json:"intValue,omitempty"` // int64 as string in proto3 JSON
-	DoubleValue *float64 `json:"doubleValue,omitempty"`
-	BoolValue   *bool    `json:"boolValue,omitempty"`
+// PointStartTimestamp converts StartTimeUnixNano to *time.Time, nil if zero.
+func PointStartTimestamp(dp *metricsv1.NumberDataPoint) *time.Time {
+	if dp.StartTimeUnixNano == 0 {
+		return nil
+	}
+	t := time.Unix(0, int64(dp.StartTimeUnixNano)).UTC()
+	return &t
 }
 
-// FlattenAttributes converts a []KeyValue into a plain map suitable for JSONB storage.
-func FlattenAttributes(attrs []KeyValue) map[string]any {
+// FlattenAttributes converts proto KeyValue attributes to a plain map
+// suitable for JSONB storage and GIN-indexed containment queries.
+func FlattenAttributes(attrs []*commonv1.KeyValue) map[string]any {
 	result := make(map[string]any, len(attrs))
 	for _, kv := range attrs {
-		result[kv.Key] = kv.Value.Unwrap()
+		result[kv.Key] = unwrapAnyValue(kv.Value)
 	}
 	return result
 }
 
-// Unwrap returns the underlying Go value for an AnyValue.
-func (v AnyValue) Unwrap() any {
-	switch {
-	case v.StringValue != nil:
-		return *v.StringValue
-	case v.IntValue != nil:
-		if i, err := strconv.ParseInt(*v.IntValue, 10, 64); err == nil {
-			return i
-		}
-		return *v.IntValue
-	case v.DoubleValue != nil:
-		return *v.DoubleValue
-	case v.BoolValue != nil:
-		return *v.BoolValue
-	default:
-		return nil
-	}
-}
-
 // ExtractServiceName returns the value of the "service.name" resource attribute.
-func ExtractServiceName(attrs []KeyValue) string {
+func ExtractServiceName(attrs []*commonv1.KeyValue) string {
 	for _, kv := range attrs {
-		if kv.Key == "service.name" && kv.Value.StringValue != nil {
-			return *kv.Value.StringValue
+		if kv.Key == "service.name" {
+			if sv, ok := kv.Value.Value.(*commonv1.AnyValue_StringValue); ok {
+				return sv.StringValue
+			}
 		}
 	}
 	return ""
 }
 
-func parseUnixNano(s string) (time.Time, error) {
-	if s == "" {
-		return time.Time{}, fmt.Errorf("empty timestamp")
+func unwrapAnyValue(v *commonv1.AnyValue) any {
+	if v == nil {
+		return nil
 	}
-	ns, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse unix nano %q: %w", s, err)
+	switch val := v.Value.(type) {
+	case *commonv1.AnyValue_StringValue:
+		return val.StringValue
+	case *commonv1.AnyValue_IntValue:
+		return val.IntValue
+	case *commonv1.AnyValue_DoubleValue:
+		return val.DoubleValue
+	case *commonv1.AnyValue_BoolValue:
+		return val.BoolValue
+	default:
+		return nil
 	}
-	return time.Unix(0, ns).UTC(), nil
 }
