@@ -7,7 +7,8 @@ A backend system that ingests OpenTelemetry metrics, processes them via a messag
 | Service | Description | Port |
 |---|---|---|
 | `ingest` | HTTP server accepting OTLP metrics | `4317` |
-| `storage` | Queue consumer, DB writer, query API | `8081` |
+| `consumer` | Kafka consumer, DB writer (no public API) | — |
+| `query` | Read-only HTTP API over stored metrics | `8081` |
 | `redpanda` | Kafka-compatible broker | `19092` |
 
 ## Architecture
@@ -22,18 +23,21 @@ POST /v1/metrics
    Kafka (Redpanda)     otel.metrics topic
       │
       ▼
- storage consumer       (storage/)
-      │
+ consumer               (storage/cmd/consumer)
+      │                  no public API
       ├── UpsertMetric
       ├── InsertDataPoints
       │         │
       │         ▼
       │    TimescaleDB       data_points hypertable
       │
-      └── query API (:8081)
-            GET /v1/data_points
-            GET /v1/dead_letters
-            GET /healthz
+      │
+ query API (:8081)      (storage/cmd/query)
+      │                  read-only, DB only
+      ├── GET /v1/metrics
+      ├── GET /v1/data_points
+      ├── GET /v1/dead_letters
+      └── GET /healthz
 ```
 
 Failed messages are retried up to `MAX_RETRIES` times, then written to the `dead_letter_queue` table.
@@ -100,7 +104,7 @@ All services are configured via environment variables. Defaults work out of the 
 | `CONSUMER_GROUP` | `storage-consumers` | Kafka consumer group |
 | `MAX_RETRIES` | `3` | Retry attempts before dead-letter |
 | `DATABASE_URL` | `postgres://otel:otel@localhost:5432/otel_metrics` | TimescaleDB DSN |
-| `STORAGE_ADDR` | `:8081` | Storage consumer query API listen address |
+| `QUERY_ADDR` | `:8081` | Query API server listen address |
 
 ## Repository layout
 
@@ -119,15 +123,18 @@ JL/
 │   │   └── server/     # chi router + middleware
 │   ├── e2e/            # end-to-end tests
 │   └── Dockerfile
-└── storage/            # queue consumer + DB storage
-    ├── cmd/consumer/   # entry point
+└── storage/            # queue consumer + DB storage + query API
+    ├── cmd/
+    │   ├── consumer/   # Kafka consumer (no public API)
+    │   └── query/      # read-only HTTP API server
     ├── internal/
-    │   ├── api/        # query HTTP API
+    │   ├── api/        # query HTTP handlers
+    │   ├── config/     # LoadConsumer() / LoadQuery()
     │   ├── consumer/   # Kafka consumer loop
     │   ├── models/     # OTLP proto helpers
     │   └── storage/    # pgx repository + migrations
     ├── e2e/            # end-to-end tests
-    └── Dockerfile
+    └── Dockerfile      # CMD arg selects consumer or query
 ```
 
 ## Data model
